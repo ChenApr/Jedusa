@@ -40,6 +40,23 @@ from medusa.model.medusa_model_legacy import MedusaModel, MedusaConfig
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
+# Default Vicuna v1.5-style chat template used when a tokenizer config lacks one.
+VICUNA_V15_CHAT_TEMPLATE = (
+    "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}"
+    "{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}"
+    "{% set system_message = 'A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user\\'s questions.' %}{% endif %}"
+    "{% for message in loop_messages %}"
+    "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+    "{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+    "{% endif %}"
+    "{% if loop.index0 == 0 %}{{ system_message }}{% endif %}"
+    "{% if message['role'] == 'user' %}{{ ' USER: ' + message['content'].strip() }}"
+    "{% elif message['role'] == 'assistant' %}{{ ' ASSISTANT: ' + message['content'].strip() + eos_token }}"
+    "{% endif %}{% endfor %}"
+    "{% if add_generation_prompt %}{{ ' ASSISTANT:' }}{% endif %}"
+)
+
 
 # Customized for training Medusa heads
 class CustomizedTrainer(Trainer):
@@ -340,10 +357,15 @@ def train():
         cache_dir=training_args.cache_dir,
         model_max_length=training_args.model_max_length,
         padding_side="right",
-        use_fast=True,
+        use_fast=False,
+        legacy=False,
     )
     tokenizer.pad_token = tokenizer.unk_token
     tokenizer.pad_token = tokenizer.eos_token
+
+    # Fallback to a Vicuna-style chat template when the tokenizer config lacks one.
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = VICUNA_V15_CHAT_TEMPLATE
 
     # Making sure the tokenizer works before loading the model.
     print(tokenizer(["This is a test", "secondary"], padding=True))

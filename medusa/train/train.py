@@ -40,10 +40,27 @@ from medusa.model.medusa_model_legacy import MedusaModel, MedusaConfig
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
+# Default Vicuna v1.5-style chat template used when a tokenizer config lacks one.
+VICUNA_V15_CHAT_TEMPLATE = (
+    "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}"
+    "{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}"
+    "{% set system_message = 'A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user\\'s questions.' %}{% endif %}"
+    "{% for message in loop_messages %}"
+    "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+    "{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+    "{% endif %}"
+    "{% if loop.index0 == 0 %}{{ system_message }}{% endif %}"
+    "{% if message['role'] == 'user' %}{{ ' USER: ' + message['content'].strip() }}"
+    "{% elif message['role'] == 'assistant' %}{{ ' ASSISTANT: ' + message['content'].strip() + eos_token }}"
+    "{% endif %}{% endfor %}"
+    "{% if add_generation_prompt %}{{ ' ASSISTANT:' }}{% endif %}"
+)
+
 
 # Customized for training Medusa heads
 class CustomizedTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """
         Compute the training loss for the model.
 
@@ -180,7 +197,32 @@ def preprocess(
     prompts = []
     # # import pdb; pdb.set_trace()
     for i, conversation in enumerate(sources):
+        # prompt = tokenizer.apply_chat_template(conversation, tokenize=False)
+        # ---- normalize ShareGPT -> ChatML ----
+        if isinstance(conversation, dict):
+            # 有些数据会把 conversations 包在 dict 里
+            conversation = conversation.get("conversations", conversation)
+
+        if isinstance(conversation, dict):
+            conversation = [conversation]
+
+        norm = []
+        for m in conversation:
+            role = m.get("role") or m.get("from") or m.get("speaker")
+            content = m.get("content") or m.get("value") or m.get("text") or ""
+            if role in ("human", "user"):
+                role = "user"
+            elif role in ("gpt", "assistant", "bot"):
+                role = "assistant"
+            elif role == "system":
+                role = "system"
+            else:
+                role = "user"
+            norm.append({"role": role, "content": content})
+
+        conversation = norm
         prompt = tokenizer.apply_chat_template(conversation, tokenize=False)
+        # --------------------------------------
         prompts.append(prompt)
         conversations.append(conversation)
 
@@ -341,9 +383,14 @@ def train():
         model_max_length=training_args.model_max_length,
         padding_side="right",
         use_fast=True,
+        legacy=False,
     )
     tokenizer.pad_token = tokenizer.unk_token
     tokenizer.pad_token = tokenizer.eos_token
+
+    # Fallback to a Vicuna-style chat template when the tokenizer config lacks one.
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = VICUNA_V15_CHAT_TEMPLATE
 
     # Making sure the tokenizer works before loading the model.
     print(tokenizer(["This is a test", "secondary"], padding=True))

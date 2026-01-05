@@ -8,6 +8,36 @@ import inspect
 import math
 from typing import List, Optional, Tuple, Union
 
+def linear_matmul(linear, x):
+    """
+    A safe Linear that avoids broadcast_to*multiply*reduce.add.
+    Works for x shape [B,S,H] or [N,H]. Assumes linear.weight is [O,I].
+    """
+    import jittor as jt
+    # Some ports may wrap Linear differently; keep it defensive.
+    w = getattr(linear, "weight", None)
+    b = getattr(linear, "bias", None)
+    if w is None:
+        # fallback to original call
+        return linear(x)
+
+    # Ensure dtype matches to prevent implicit fp32 paths.
+    if hasattr(x, "dtype") and hasattr(w, "dtype") and x.dtype != w.dtype:
+        x = x.astype(w.dtype)
+
+    # Flatten [B,S,H] -> [B*S,H] to make matmul stable.
+    if len(x.shape) == 3:
+        B, S, H = x.shape
+        y2 = jt.matmul(x.reshape((-1, H)), w.transpose())  # [B*S, O]
+        y = y2.reshape((B, S, y2.shape[-1]))
+    else:
+        y = jt.matmul(x, w.transpose())
+
+    if b is not None:
+        y = y + b
+    return y
+
+
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -20,18 +50,20 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
-    logging,
+        logging,
     replace_return_docstrings,
 )
 
+# ---- flash-attn availability helpers (compat across transformers versions) ----
 try:
-    from transformers.utils import is_flash_attn_available
-except ImportError:
+    from transformers.utils import is_flash_attn_available  # old name
+except Exception:
     try:
-        from transformers.utils import is_flash_attn_2_available as is_flash_attn_available
-    except ImportError:
+        from transformers.utils import is_flash_attn_2_available as is_flash_attn_available  # new name
+    except Exception:
         def is_flash_attn_available():
             return False
+
 from transformers.models.mistral.configuration_mistral import MistralConfig
 
 
@@ -42,7 +74,8 @@ if is_flash_attn_available():
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 
 
-logger = logging.get_logger(__name__)
+from transformers.utils import logging as hf_logging
+logger = hf_logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "MistralConfig"
 
@@ -189,7 +222,7 @@ class MistralMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(self.act_fn(linear_matmul(self.gate_proj, x)) * linear_matmul(self.up_proj, x))
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -252,9 +285,9 @@ class MistralAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        query_states = linear_matmul(self.q_proj, hidden_states)
+        key_states = linear_matmul(self.k_proj, hidden_states)
+        value_states = linear_matmul(self.v_proj, hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -308,7 +341,7 @@ class MistralAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = self.o_proj(attn_output)
+        attn_output = linear_matmul(self.o_proj, attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -335,9 +368,9 @@ class MistralFlashAttention2(MistralAttention):
     ):
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        query_states = linear_matmul(self.q_proj, hidden_states)
+        key_states = linear_matmul(self.k_proj, hidden_states)
+        value_states = linear_matmul(self.v_proj, hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -433,7 +466,7 @@ class MistralFlashAttention2(MistralAttention):
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
-        attn_output = self.o_proj(attn_output)
+        attn_output = linear_matmul(self.o_proj, attn_output)
 
         if not output_attentions:
             attn_weights = None

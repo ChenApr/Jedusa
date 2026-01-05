@@ -130,6 +130,12 @@ class MedusaModelABC(nn.Module):
         **kwargs,
     ):
         # Manually load config to ensure that the medusa_num_heads parameter is loaded
+        if "config" in kwargs:
+            return super().from_pretrained(
+                pretrained_model_name_or_path,
+                *args,
+                **kwargs,
+            )
         try:
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, local_files_only=True)
             if "medusa_num_heads" in kwargs:
@@ -400,13 +406,16 @@ class MedusaModel():
         **kwargs,
     ):
         # Manually load config to ensure that the medusa_num_heads parameter is loaded
-        try:
-            config = AutoConfig.from_pretrained(pretrained_model_name_or_path, local_files_only=True)
-        except:
-            # MEDUSA-v0.1 load
-            config = MedusaConfig.from_pretrained(pretrained_model_name_or_path, local_files_only=True)
-            base_model_config = AutoConfig.from_pretrained(config.base_model_name_or_path, local_files_only=True)
-            config.model_type = base_model_config.model_type
+        if "config" in kwargs:
+            config = kwargs["config"]
+        else:
+            try:
+                config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+            except:
+                # MEDUSA-v0.1 load
+                config = MedusaConfig.from_pretrained(pretrained_model_name_or_path)
+                base_model_config = AutoConfig.from_pretrained(config.base_model_name_or_path)
+                config.model_type = base_model_config.model_type
 
         if config.model_type == "llama":
             return MedusaModelLlama.from_pretrained(

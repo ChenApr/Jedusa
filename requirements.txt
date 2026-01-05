@@ -1,0 +1,15 @@
+# Core inference stack
+torch>=2.1.0
+transformers>=4.35.0
+sentencepiece>=0.1.99
+
+# Jittor (used for loading medusa head weights)
+jittor>=1.3.8
+
+# Serving / UI
+gradio>=3.50.0
+
+# Utilities
+numpy>=1.24.0
+tqdm>=4.66.0
+shortuuid>=1.0.0

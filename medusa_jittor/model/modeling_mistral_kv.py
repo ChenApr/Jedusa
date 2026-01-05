@@ -20,18 +20,20 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
-    logging,
+        logging,
     replace_return_docstrings,
 )
 
+# ---- flash-attn availability helpers (compat across transformers versions) ----
 try:
-    from transformers.utils import is_flash_attn_available
-except ImportError:
+    from transformers.utils import is_flash_attn_available  # old name
+except Exception:
     try:
-        from transformers.utils import is_flash_attn_2_available as is_flash_attn_available
-    except ImportError:
+        from transformers.utils import is_flash_attn_2_available as is_flash_attn_available  # new name
+    except Exception:
         def is_flash_attn_available():
             return False
+
 from transformers.models.mistral.configuration_mistral import MistralConfig
 
 
@@ -42,7 +44,8 @@ if is_flash_attn_available():
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 
 
-logger = logging.get_logger(__name__)
+from transformers.utils import logging as hf_logging
+logger = hf_logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "MistralConfig"
 

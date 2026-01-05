@@ -1,20 +1,35 @@
 import typer
 import json
-from transformers import Conversation
+# from transformers import Conversation
 from typing_extensions import Annotated
 import httpx
-import tqdm
+from tqdm import tqdm
 import asyncio
 
 app = typer.Typer()
 
+class Conversation:
+    def __init__(self):
+        self.messages = []
+    def add_message(self, message):
+        # message: {"role": "...", "content": "..."}
+        self.messages.append({"role": message["role"], "content": message["content"]})
+
 
 client = httpx.AsyncClient(timeout=None)
 
+# MODEL_ID = "../models/vicuna-7b-v1.33"
+MODEL_ID = "vicuna"
+
 async def run(conv: Conversation, url: str):
-    payload = {"model":"tgi", "messages": conv.messages}
+    payload = {"model": MODEL_ID, "messages": conv.messages}
     response = await client.post(url, json=payload)
     content = response.json()
+
+    if "choices" not in content:
+        print("bad response:", content)  # 方便定位真实错误
+        return
+
     message = content["choices"][0]["message"]
     message.pop("name", None)
     conv.add_message(message)
@@ -63,10 +78,11 @@ def main(
 
         futures = []
         for conversation in conversations:
-            future = recreate_conversation(conversation, sem, url)
-            futures.append(future)
+            futures.append(recreate_conversation(conversation, sem, url))
 
-        recreated_conversations = await tqdm.asyncio.tqdm.gather(*futures)
+        recreated_conversations = []
+        for fut in tqdm(asyncio.as_completed(futures), total=len(futures)):
+            recreated_conversations.append(await fut)
 
         with open(output_filename, "w") as f:
             json.dump(recreated_conversations, f, indent=4)

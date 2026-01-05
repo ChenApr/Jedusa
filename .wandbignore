@@ -1,0 +1,8 @@
+# ignore checkpoints
+*.pkl
+*.pt
+*.bin
+*.safetensors
+checkpoints*/
+**/checkpoints*/
+medusa_jittor/checkpoints*/
